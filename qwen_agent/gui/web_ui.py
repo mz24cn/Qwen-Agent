@@ -95,7 +95,7 @@ class WebUI:
         self.initial_prompt_text = ''
         if self.initial_prompt_name:
             _, self.initial_prompt_text = self.load_prompt_suggestion(
-                self.initial_prompt_name, self.prompt_suggestions)
+                self.initial_prompt_name)
         self.verbose = chatbot_config.get('verbose', False)
 
         # === 管理功能初始化 ===
@@ -104,14 +104,14 @@ class WebUI:
         # tools工具管理：JSON array，每个元素可能是字符串或MCP servers JSON
         self.tools_list = self._load_tools_list()
         # agent管理：agent列表，由llm_cfg和tools组合创建
-        self.agent_configs = self._load_agent_configs()
+        self.agent_cfg_list = self._load_agent_configs()
         # 动态创建的agent列表（从agent_configs创建）
-        self.agent_list = self._create_agents_from_configs()
+        self.agent_list = [self._create_agent_from_config(cfg) for cfg in self.agent_cfg_list]
         for agent in initial_agent_list:
             self.agent_list.append(agent)
         
         # 初始化agent_config_list：优先使用动态agent列表，否则使用初始agent列表
-        self.agent_config_list = [{
+        agent_config_list = [{
             'name': agent.name,
             'avatar': chatbot_config.get(
                 'agent.avatar',
@@ -133,7 +133,6 @@ class WebUI:
                 theme=customTheme,
         ) as demo:
             history = gr.State([])
-            prompt_suggestions_state = gr.State(self.prompt_suggestions)
 
             # === 管理面板：水平放置四个管理功能 ===
             with gr.Accordion("管理面板", open=False):
@@ -142,7 +141,6 @@ class WebUI:
                         # === 管理功能：LLM配置管理 ===
                         with gr.Group():
                             gr.Markdown("### LLM配置管理")
-                            llm_cfg_state = gr.State(self.llm_cfg_list)
                             llm_cfg_choices_init = self._get_llm_cfg_choices(self.llm_cfg_list)
                             llm_cfg_selector = gr.Dropdown(
                                 label='选择配置',
@@ -152,7 +150,7 @@ class WebUI:
                                 allow_custom_value=False,
                             )
                             llm_cfg_json = gr.Textbox(
-                                label='LLM配置 (JSON Object)',
+                                label='LLM配置 (JSON对象)',
                                 value='',
                                 placeholder='{"model": "qwen-plus", "model_type": "qwen_dashscope", "api_key": ""}',
                                 lines=8,
@@ -162,13 +160,12 @@ class WebUI:
                                 add_llm_cfg_btn = gr.Button('添加', variant='primary')
                                 update_llm_cfg_btn = gr.Button('更新')
                                 delete_llm_cfg_btn = gr.Button('删除', variant='stop')
-                                reload_llm_cfg_btn = gr.Button('重新加载')
+                                reload_llm_cfg_btn = gr.Button('重新加载', variant="secondary")
 
                     with gr.Column():
                         # === 管理功能：工具管理 ===
                         with gr.Group():
                             gr.Markdown("### 工具管理")
-                            tools_state = gr.State(self.tools_list)
                             tools_selector = gr.Dropdown(
                                 label='选择工具',
                                 choices=self._get_tools_choices(self.tools_list),
@@ -187,17 +184,16 @@ class WebUI:
                                 add_tools_btn = gr.Button('添加', variant='primary')
                                 update_tools_btn = gr.Button('更新')
                                 delete_tools_btn = gr.Button('删除', variant='stop')
-                                reload_tools_btn = gr.Button('重新加载')
+                                reload_tools_btn = gr.Button('重新加载', variant="secondary")
 
                     with gr.Column():
                         # === 管理功能：Agent管理 ===
                         with gr.Group():
                             gr.Markdown("### Agent管理")
-                            agent_configs_state = gr.State(self.agent_configs)
                             agent_configs_selector = gr.Dropdown(
                                 label='选择Agent',
-                                choices=self._get_agent_config_choices(self.agent_configs),
-                                value=None if len(self.agent_configs) == 0 else self._get_agent_config_choices(self.agent_configs)[-1] if self.agent_configs else None,
+                                choices=self._get_agent_config_choices(self.agent_cfg_list),
+                                value=None if len(self.agent_cfg_list) == 0 else self._get_agent_config_choices(self.agent_cfg_list)[-1] if self.agent_cfg_list else None,
                                 interactive=True,
                                 allow_custom_value=False,
                             )
@@ -232,8 +228,7 @@ class WebUI:
                                 add_agent_configs_btn = gr.Button('添加', variant='primary')
                                 update_agent_configs_btn = gr.Button('更新')
                                 delete_agent_configs_btn = gr.Button('删除', variant='stop')
-                                reload_agent_configs_btn = gr.Button('重新加载')
-                                refresh_agents_btn = gr.Button('刷新Agent列表')
+                                reload_agent_configs_btn = gr.Button('重新加载', variant="secondary")
 
             with ms.Application():
                 with gr.Row(elem_classes='container'):
@@ -241,7 +236,7 @@ class WebUI:
                         chatbot = mgr.Chatbot(value=convert_history_to_chatbot(messages=messages),
                                               avatar_images=[
                                                   self.user_config,
-                                                  self.agent_config_list,
+                                                  agent_config_list,
                                               ],
                                               height=850,
                                               avatar_image_width=80,
@@ -316,7 +311,7 @@ class WebUI:
                             gr.Markdown("### 提示词模板管理")
                             prompt_selector = gr.Dropdown(
                                 label='选择提示词模板',
-                                choices=list(self.prompt_suggestions.keys()),
+                                choices=list(self.prompt_suggestions.keys()) if self.prompt_suggestions else [],
                                 value=self.initial_prompt_name,
                                 interactive=True,
                             )
@@ -332,7 +327,7 @@ class WebUI:
                         # 选择推荐对话时，加载到编辑区
                         prompt_selector.change(
                             fn=self.load_prompt_suggestion,
-                            inputs=[prompt_selector, prompt_suggestions_state],
+                            inputs=[prompt_selector],
                             outputs=[prompt_name, prompt_text],
                             queue=False,
                         )
@@ -340,23 +335,23 @@ class WebUI:
                         # 保存/更新推荐对话
                         save_prompt_btn.click(
                             fn=self.save_prompt_suggestion,
-                            inputs=[prompt_name, prompt_text, prompt_suggestions_state],
-                            outputs=[prompt_suggestions_state, prompt_selector],
+                            inputs=[prompt_name, prompt_text],
+                            outputs=[prompt_selector],
                             queue=False,
                         )
 
                         # 删除推荐对话
                         delete_prompt_btn.click(
                             fn=self.delete_prompt_suggestion,
-                            inputs=[prompt_name, prompt_suggestions_state],
-                            outputs=[prompt_suggestions_state, prompt_selector, prompt_name, prompt_text],
+                            inputs=[prompt_name],
+                            outputs=[prompt_selector, prompt_name, prompt_text],
                             queue=False,
                         )
 
                         # 将选中的推荐对话应用到输入框
                         apply_prompt_btn.click(
                             fn=self.apply_prompt_suggestion,
-                            inputs=[prompt_selector, prompt_suggestions_state],
+                            inputs=[prompt_selector],
                             outputs=[input],
                             queue=False,
                         )
@@ -364,128 +359,109 @@ class WebUI:
                         # LLM配置管理事件
                         llm_cfg_selector.change(
                             fn=self.load_llm_cfg_item,
-                            inputs=[llm_cfg_selector, llm_cfg_state],
+                            inputs=[llm_cfg_selector],
                             outputs=[llm_cfg_json],
                             queue=False,
                         )
                         add_llm_cfg_btn.click(
                             fn=self.add_llm_cfg_item,
-                            inputs=[llm_cfg_json, llm_cfg_state],
-                            outputs=[llm_cfg_state, llm_cfg_selector, llm_cfg_json],
+                            inputs=[llm_cfg_json],
+                            outputs=[llm_cfg_selector, llm_cfg_json],
                             queue=False,
                         )
                         update_llm_cfg_btn.click(
                             fn=self.update_llm_cfg_item,
-                            inputs=[llm_cfg_selector, llm_cfg_json, llm_cfg_state],
-                            outputs=[llm_cfg_state, llm_cfg_selector, llm_cfg_json],
+                            inputs=[llm_cfg_selector, llm_cfg_json],
+                            outputs=[llm_cfg_selector, llm_cfg_json],
                             queue=False,
                         )
                         delete_llm_cfg_btn.click(
                             fn=self.delete_llm_cfg_item,
-                            inputs=[llm_cfg_selector, llm_cfg_state],
-                            outputs=[llm_cfg_state, llm_cfg_selector, llm_cfg_json],
+                            inputs=[llm_cfg_selector],
+                            outputs=[llm_cfg_selector, llm_cfg_json],
                             queue=False,
                         )
                         reload_llm_cfg_btn.click(
                             fn=self.reload_llm_cfg_list,
                             inputs=[],
-                            outputs=[llm_cfg_state, llm_cfg_selector, llm_cfg_json],
+                            outputs=[llm_cfg_selector, llm_cfg_json],
                             queue=False,
                         )
 
                         # 工具管理事件
                         tools_selector.change(
                             fn=self.load_tools_item,
-                            inputs=[tools_selector, tools_state],
+                            inputs=[tools_selector],
                             outputs=[tools_json],
                             queue=False,
                         )
                         add_tools_btn.click(
                             fn=self.add_tools_item,
-                            inputs=[tools_json, tools_state],
-                            outputs=[tools_state, tools_selector, tools_json],
+                            inputs=[tools_json],
+                            outputs=[tools_selector, tools_json],
                             queue=False,
                         )
                         update_tools_btn.click(
                             fn=self.update_tools_item,
-                            inputs=[tools_selector, tools_json, tools_state],
-                            outputs=[tools_state, tools_selector, tools_json],
+                            inputs=[tools_selector, tools_json],
+                            outputs=[tools_selector, tools_json],
                             queue=False,
                         )
                         delete_tools_btn.click(
                             fn=self.delete_tools_item,
-                            inputs=[tools_selector, tools_state],
-                            outputs=[tools_state, tools_selector, tools_json],
+                            inputs=[tools_selector],
+                            outputs=[tools_selector, tools_json],
                             queue=False,
                         )
                         reload_tools_btn.click(
                             fn=self.reload_tools_list,
                             inputs=[],
-                            outputs=[tools_state, tools_selector, tools_json],
+                            outputs=[tools_selector, tools_json],
                             queue=False,
                         )
 
                         # Agent管理事件 - 当LLM配置或工具列表变化时，更新下拉框选项
-                        def update_agent_llm_cfg_choices(llm_cfg_state):
+                        def update_agent_llm_cfg_choices():
                             """更新Agent管理中的LLM配置下拉框"""
                             from qwen_agent.gui.gradio_dep import gr
-                            choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
+                            choices = self._get_llm_cfg_choices(self.llm_cfg_list)
                             # choices格式为 [(显示名称, ID), ...]
                             return gr.update(choices=choices, value=choices[0][1] if choices else None)
                         
-                        def update_agent_tools_choices(tools_state):
+                        def update_agent_tools_choices():
                             """更新Agent管理中的工具多选框"""
                             from qwen_agent.gui.gradio_dep import gr
-                            choices = self._get_tools_choices(tools_state or self.tools_list)
+                            choices = self._get_tools_choices(self.tools_list)
                             return gr.update(choices=choices, value=[])
-
-                        llm_cfg_state.change(
-                            fn=update_agent_llm_cfg_choices,
-                            inputs=[llm_cfg_state],
-                            outputs=[agent_llm_cfg_selector],
-                            queue=False,
-                        )
-                        tools_state.change(
-                            fn=update_agent_tools_choices,
-                            inputs=[tools_state],
-                            outputs=[agent_tools_selector],
-                            queue=False,
-                        )
 
                         agent_configs_selector.change(
                             fn=self.load_agent_config_item,
-                            inputs=[agent_configs_selector, agent_configs_state, llm_cfg_state, tools_state],
+                            inputs=[agent_configs_selector],
                             outputs=[agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector],
                             queue=False,
                         )
                         add_agent_configs_btn.click(
                             fn=self.add_agent_config_item,
-                            inputs=[agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_configs_state, llm_cfg_state, tools_state],
-                            outputs=[agent_configs_state, agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_selector, agent_info_block, agent_plugins_block],
+                            inputs=[agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector],
+                            outputs=[agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_selector, agent_info_block, agent_plugins_block],
                             queue=False,
                         )
                         update_agent_configs_btn.click(
                             fn=self.update_agent_config_item,
-                            inputs=[agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_configs_state, llm_cfg_state, tools_state],
-                            outputs=[agent_configs_state, agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_selector, agent_info_block, agent_plugins_block],
+                            inputs=[agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector],
+                            outputs=[agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_selector, agent_info_block, agent_plugins_block],
                             queue=False,
                         )
                         delete_agent_configs_btn.click(
                             fn=self.delete_agent_config_item,
-                            inputs=[agent_configs_selector, agent_configs_state, llm_cfg_state, tools_state],
-                            outputs=[agent_configs_state, agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_selector, agent_info_block, agent_plugins_block],
+                            inputs=[agent_configs_selector],
+                            outputs=[agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector, agent_selector, agent_info_block, agent_plugins_block],
                             queue=False,
                         )
                         reload_agent_configs_btn.click(
                             fn=self.reload_agent_configs,
-                            inputs=[llm_cfg_state, tools_state],
-                            outputs=[agent_configs_state, agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector],
-                            queue=False,
-                        )
-                        refresh_agents_btn.click(
-                            fn=self.refresh_agents,
-                            inputs=[agent_configs_state],
-                            outputs=[agent_selector, agent_info_block, agent_plugins_block],
+                            inputs=[],
+                            outputs=[agent_configs_selector, agent_name_input, agent_description_input, agent_llm_cfg_selector, agent_tools_selector],
                             queue=False,
                         )
 
@@ -530,9 +506,30 @@ class WebUI:
                             [chatbot, history],
                         )
 
-                    input_promise.then(self.flushed, None, [input])
+                    input_promise.then(lambda _: gr.update(interactive=True), None, [input])
 
-            demo.load(None)
+            demo.load(
+                fn=self._load_latest_settings,
+                inputs=[],
+                outputs=[
+                    prompt_selector,
+                    prompt_name,
+                    prompt_text,
+
+                    llm_cfg_selector,
+                    llm_cfg_json,
+
+                    tools_selector,
+                    tools_json,
+
+                    agent_configs_selector,
+                    agent_name_input,
+                    agent_description_input,
+                    agent_llm_cfg_selector,
+                    agent_tools_selector
+                ],
+                queue=False
+            )
 
         # 暴露 Blocks 与底层 FastAPI app，便于在同一端口上由外部注入自定义 API
         self.demo = demo
@@ -675,11 +672,6 @@ class WebUI:
         if self.verbose:
             logger.info('agent_run response:\n' + pprint.pformat(responses, indent=2))
 
-    def flushed(self):
-        from qwen_agent.gui.gradio_dep import gr
-
-        return gr.update(interactive=True)
-
     def _normalize_prompt_suggestions(self, raw_suggestions):
         """将各种形式的 prompt.suggestions 统一为 {name: suggestion} 的字典。
 
@@ -692,7 +684,7 @@ class WebUI:
         if isinstance(raw_suggestions, list):
             suggestions = {}
             for i, item in enumerate(raw_suggestions):
-                name = f'示例{i + 1}'
+                name = f'{i + 1}'
                 suggestions[name] = item
             return suggestions
         return {}
@@ -720,6 +712,77 @@ class WebUI:
             print_traceback()
             return {}
 
+    def _load_latest_settings(self):
+        """页面加载（首次/刷新）时，从YAML读取最新提示词配置，返回组件更新值"""
+        from qwen_agent.gui.gradio_dep import gr
+
+        # 1. 读取磁盘上最新的提示词配置
+        latest_suggestions = self._load_prompt_suggestions_from_yaml()
+        # 2. 更新实例属性，保持状态一致
+        self.prompt_suggestions = latest_suggestions
+        # 3. 确定默认选中项
+        new_selected_name = next(iter(latest_suggestions.keys()), None) if latest_suggestions else None
+
+        # 4. 获取默认选中项对应的名称和内容
+        prompt_name_val = ""
+        prompt_text_val = ""
+        if new_selected_name:
+            prompt_name_val, prompt_text_val = self.load_prompt_suggestion(new_selected_name)
+
+        latest_llm_cfg_list = self._load_llm_cfg_list()
+        llm_cfg_choices = self._get_llm_cfg_choices(latest_llm_cfg_list)
+        llm_cfg_selected_val = llm_cfg_choices[-1][1] if llm_cfg_choices else None
+
+        latest_tools_list = self._load_tools_list()
+        tools_choices = self._get_tools_choices(latest_tools_list)
+        tools_selected_val = tools_choices[-1] if tools_choices else None
+
+        latest_agent_configs = self._load_agent_configs()
+        agent_configs_choices = self._get_agent_config_choices(latest_agent_configs)
+        agent_configs_selected_val = agent_configs_choices[-1] if agent_configs_choices else None
+
+        agent_llm_cfg_choices = self._get_llm_cfg_choices(latest_llm_cfg_list)
+        agent_llm_cfg_selected_val = agent_llm_cfg_choices[0][1] if agent_llm_cfg_choices else None
+        agent_tools_choices = self._get_tools_choices(latest_tools_list)
+        agent_tools_selected_val = []
+
+        # 5. 返回组件更新值
+        return (
+            gr.update(
+                choices=list(latest_suggestions.keys()) if latest_suggestions else [],
+                value=new_selected_name
+            ),
+            gr.update(value=prompt_name_val),
+            gr.update(value=prompt_text_val),
+
+            gr.update(
+                choices=llm_cfg_choices,
+                value=llm_cfg_selected_val
+            ),
+            gr.update(value=''),
+
+            gr.update(
+                choices=tools_choices,
+                value=tools_selected_val
+            ),
+            gr.update(value=''),
+
+            gr.update(
+                choices=agent_configs_choices,
+                value=agent_configs_selected_val
+            ),
+            gr.update(value=''),
+            gr.update(value=''),
+            gr.update(
+                choices=agent_llm_cfg_choices,
+                value=agent_llm_cfg_selected_val
+            ),
+            gr.update(
+                choices=agent_tools_choices,
+                value=agent_tools_selected_val
+            )
+        )
+    
     def _save_prompt_suggestions_to_yaml(self, suggestions: dict) -> None:
         """将当前推荐对话 map 持久化到 YAML 文件。"""
         try:
@@ -737,28 +800,15 @@ class WebUI:
             # 持久化失败不影响前端使用，只打印错误日志
             print_traceback()
 
-    def load_prompt_suggestion(self, selected_name, suggestions_state):
-        """根据下拉选择将推荐对话加载到右侧编辑区。"""
-        suggestions = suggestions_state or {}
-        if not selected_name or selected_name not in suggestions:
-            return '', ''
-
-        value = suggestions[selected_name]
-        if isinstance(value, dict):
-            text = value.get('text', '') or ''
-        else:
-            text = str(value)
-        return selected_name, text
-
-    def save_prompt_suggestion(self, name, text, suggestions_state):
+    def save_prompt_suggestion(self, name, text):
         """新增/更新推荐对话，并实时刷新下拉列表。"""
         from qwen_agent.gui.gradio_dep import gr
 
-        suggestions = dict(suggestions_state or {})
+        suggestions = self.prompt_suggestions
         name = (name or '').strip()
         if not name:
             # 忽略空名称
-            return suggestions, gr.update(choices=list(suggestions.keys()))
+            return suggestions, gr.update(choices=list(suggestions.keys()) if suggestions else [])
 
         existing = suggestions.get(name)
         if isinstance(existing, dict):
@@ -775,31 +825,47 @@ class WebUI:
         self._save_prompt_suggestions_to_yaml(suggestions)
         self.prompt_suggestions = suggestions
 
-        return suggestions, gr.update(choices=list(suggestions.keys()), value=name)
+        return gr.update(choices=list(suggestions.keys()) if suggestions else [], value=name)
 
-    def delete_prompt_suggestion(self, name, suggestions_state):
-        """删除推荐对话，并清空编辑区。"""
+    def load_prompt_suggestion(self, selected_name):
+        """根据下拉选择将推荐对话加载到右侧编辑区。"""
+        suggestions = self.prompt_suggestions
+        if not selected_name or selected_name not in suggestions:
+            return '', ''
+
+        value = suggestions[selected_name]
+        if isinstance(value, dict):
+            text = value.get('text', '') or ''
+        else:
+            text = str(value)
+        return selected_name, text
+
+    def delete_prompt_suggestion(self, name):
         from qwen_agent.gui.gradio_dep import gr
 
-        suggestions = dict(suggestions_state or {})
+        # 1. 直接修改状态变量
+        suggestions = self.prompt_suggestions
         name = (name or '').strip()
         if name in suggestions:
             suggestions.pop(name)
 
-        # 持久化到 YAML
+        # 2. 持久化 + 同步实例变量
         self._save_prompt_suggestions_to_yaml(suggestions)
-        self.prompt_suggestions = suggestions
+        self.prompt_suggestions = suggestions.copy()
 
-        return (suggestions,
-                gr.update(choices=list(suggestions.keys()), value=None),
-                gr.update(value=''),
-                gr.update(value=''))
+        # 3. 直接推送新的 choices 到前端
+        new_selected = next(iter(suggestions.keys()), None) if suggestions else None
+        return (
+            gr.update(choices=list(suggestions.keys()), value=new_selected),  # 直接更新下拉框
+            gr.update(value=''),
+            gr.update(value='')
+        )
 
-    def apply_prompt_suggestion(self, selected_name, suggestions_state):
+    def apply_prompt_suggestion(self, selected_name):
         """将选中的推荐对话内容应用到多模态输入组件中。"""
         from qwen_agent.gui.gradio_dep import gr
 
-        suggestions = suggestions_state or {}
+        suggestions = self.prompt_suggestions
         if not selected_name or selected_name not in suggestions:
             return gr.update()
 
@@ -825,19 +891,16 @@ class WebUI:
     def _create_agent_info_block(self, agent_index=0):
         from qwen_agent.gui.gradio_dep import gr
 
-        # 获取当前可用的agent列表（动态或静态）
-        current_agent_config_list = self._get_agent_config_list(self.agent_list)
-
-        if agent_index >= len(current_agent_config_list):
+        if agent_index >= len(self.agent_cfg_list):
             agent_index = 0
 
-        if agent_index < len(current_agent_config_list):
-            agent_config_interactive = current_agent_config_list[agent_index]
+        if agent_index < len(self.agent_cfg_list):
+            agent_config_interactive = self.agent_cfg_list[agent_index]
             return gr.HTML(
                 format_cover_html(
                     bot_name=agent_config_interactive['name'],
                     bot_description=agent_config_interactive['description'],
-                    bot_avatar=agent_config_interactive['avatar'],
+                    bot_avatar=agent_config_interactive['avatar'] if 'avatar' in agent_config_interactive else (self.user_config.get('agent.avatar') or get_avatar_image(agent_config_interactive['name'])),
                 ))
         else:
             return gr.HTML(
@@ -873,14 +936,6 @@ class WebUI:
                 choices=[],
                 interactive=False,
             )
-
-    def _get_agent_config_list(self, agent_list):
-        """根据agent列表生成配置列表"""
-        return [{
-            'name': agent.name,
-            'avatar': self.user_config.get('agent.avatar') or get_avatar_image(agent.name),
-            'description': agent.description or "I'm a helpful assistant.",
-        } for agent in agent_list]
 
     # === LLM配置管理相关方法 ===
     def _format_llm_cfg_name(self, llm_cfg: dict, index: int = None) -> str:
@@ -984,35 +1039,21 @@ class WebUI:
         except Exception:
             print_traceback()
 
-    def save_llm_cfg_list(self, llm_cfg_json_str):
-        """保存LLM配置列表"""
-        try:
-            llm_cfg_list = json.loads(llm_cfg_json_str)
-            if not isinstance(llm_cfg_list, list):
-                raise ValueError('LLM配置必须是JSON数组格式')
-            self.llm_cfg_list = llm_cfg_list
-            self._save_llm_cfg_list(llm_cfg_list)
-            return llm_cfg_list
-        except Exception:
-            print_traceback()
-            return self.llm_cfg_list
-
     def reload_llm_cfg_list(self):
         """重新加载LLM配置列表"""
         from qwen_agent.gui.gradio_dep import gr
         self.llm_cfg_list = self._load_llm_cfg_list()
         choices = self._get_llm_cfg_choices(self.llm_cfg_list)
         new_value = choices[-1][1] if choices else None
-        return self.llm_cfg_list, gr.update(choices=choices, value=new_value), gr.update(value='')
+        return gr.update(choices=choices, value=new_value), gr.update(value='')
 
-    def load_llm_cfg_item(self, selector, llm_cfg_state):
+    def load_llm_cfg_item(self, selector):
         """加载选中的LLM配置项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
             return gr.update(value='')
         try:
-            llm_cfg_list = llm_cfg_state or self.llm_cfg_list
-            cfg = self._get_llm_cfg_by_id(selector, llm_cfg_list)
+            cfg = self._get_llm_cfg_by_id(selector, self.llm_cfg_list)
             if cfg:
                 # 创建副本，排除ID字段用于显示（ID是只读的）
                 display_cfg = {k: v for k, v in cfg.items() if k != 'id'}
@@ -1021,7 +1062,7 @@ class WebUI:
             print_traceback()
         return gr.update(value='')
 
-    def add_llm_cfg_item(self, llm_cfg_json_str, llm_cfg_state):
+    def add_llm_cfg_item(self, llm_cfg_json_str):
         """添加新的LLM配置项"""
         from qwen_agent.gui.gradio_dep import gr
         try:
@@ -1030,27 +1071,27 @@ class WebUI:
                 raise ValueError('LLM配置必须是JSON对象格式')
             # 为新配置生成唯一ID
             llm_cfg['id'] = str(uuid.uuid4())
-            llm_cfg_list = list(llm_cfg_state or self.llm_cfg_list)
+            llm_cfg_list = list(self.llm_cfg_list)
             llm_cfg_list.append(llm_cfg)
             self.llm_cfg_list = llm_cfg_list
             self._save_llm_cfg_list(llm_cfg_list)
             choices = self._get_llm_cfg_choices(llm_cfg_list)
             new_id = llm_cfg['id']
-            return llm_cfg_list, gr.update(choices=choices, value=new_id), gr.update(value='')
+            return gr.update(choices=choices, value=new_id), gr.update(value='')
         except Exception:
             print_traceback()
-            return llm_cfg_state or self.llm_cfg_list, gr.update(), gr.update()
+            return gr.update(), gr.update()
 
-    def update_llm_cfg_item(self, selector, llm_cfg_json_str, llm_cfg_state):
+    def update_llm_cfg_item(self, selector, llm_cfg_json_str):
         """更新选中的LLM配置项，保持ID不变"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            return llm_cfg_state or self.llm_cfg_list, gr.update(), gr.update()
+            return gr.update(), gr.update()
         try:
             llm_cfg = json.loads(llm_cfg_json_str)
             if not isinstance(llm_cfg, dict):
                 raise ValueError('LLM配置必须是JSON对象格式')
-            llm_cfg_list = list(llm_cfg_state or self.llm_cfg_list)
+            llm_cfg_list = list(self.llm_cfg_list)
             index = self._get_llm_cfg_index_by_id(selector, llm_cfg_list)
             if 0 <= index < len(llm_cfg_list):
                 # 保持原有的ID不变（ID是只读的）
@@ -1064,25 +1105,23 @@ class WebUI:
                 self._save_llm_cfg_list(llm_cfg_list)
                 choices = self._get_llm_cfg_choices(llm_cfg_list)
                 # 保持选中同一个ID
-                return llm_cfg_list, gr.update(choices=choices, value=llm_cfg['id']), gr.update(value=llm_cfg_json_str)
+                return gr.update(choices=choices, value=llm_cfg['id']), gr.update(value=llm_cfg_json_str)
         except Exception:
             print_traceback()
-        return llm_cfg_state or self.llm_cfg_list, gr.update(), gr.update()
+        return gr.update(), gr.update()
 
-    def delete_llm_cfg_item(self, selector, llm_cfg_state):
+    def delete_llm_cfg_item(self, selector):
         """删除选中的LLM配置项，删除前检查是否有Agent引用"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            return llm_cfg_state or self.llm_cfg_list, gr.update(), gr.update()
+            return gr.update(), gr.update()
         try:
             # 检查是否有Agent引用此LLM配置
-            agent_configs = self.agent_configs or []
             referenced_agents = []
-            llm_cfg_list = llm_cfg_state or self.llm_cfg_list
             # 获取要删除的配置的索引
-            delete_index = self._get_llm_cfg_index_by_id(selector, llm_cfg_list)
+            delete_index = self._get_llm_cfg_index_by_id(selector, self.llm_cfg_list)
             
-            for agent_cfg in agent_configs:
+            for agent_cfg in self.agent_cfg_list:
                 # 检查新格式：使用ID
                 if agent_cfg.get('llm_cfg_id') == selector:
                     referenced_agents.append(agent_cfg.get('name', '未知Agent'))
@@ -1096,20 +1135,18 @@ class WebUI:
                 # 有引用，不允许删除
                 raise ValueError(f'无法删除：以下Agent正在使用此LLM配置：{", ".join(referenced_agents)}')
             
-            if 0 <= delete_index < len(llm_cfg_list):
-                llm_cfg_list = list(llm_cfg_list)
-                llm_cfg_list.pop(delete_index)
-                self.llm_cfg_list = llm_cfg_list
-                self._save_llm_cfg_list(llm_cfg_list)
-                choices = self._get_llm_cfg_choices(llm_cfg_list)
+            if 0 <= delete_index < len(self.llm_cfg_list):
+                self.llm_cfg_list.pop(delete_index)
+                self._save_llm_cfg_list(self.llm_cfg_list)
+                choices = self._get_llm_cfg_choices(self.llm_cfg_list)
                 new_value = choices[0][1] if choices else None
-                return llm_cfg_list, gr.update(choices=choices, value=new_value), gr.update(value='')
+                return gr.update(choices=choices, value=new_value), gr.update(value='')
         except ValueError as e:
             # 返回错误信息，但不删除
-            return llm_cfg_state or self.llm_cfg_list, gr.update(), gr.update(value=str(e))
+            return gr.update(), gr.update(value=str(e))
         except Exception:
             print_traceback()
-        return llm_cfg_state or self.llm_cfg_list, gr.update(), gr.update()
+        return gr.update(), gr.update()
 
     # === 工具管理相关方法 ===
     def _format_tool_name(self, tool, index: int = None) -> str:
@@ -1182,33 +1219,20 @@ class WebUI:
         except Exception:
             print_traceback()
 
-    def save_tools_list(self, tools_json_str):
-        """保存工具列表"""
-        try:
-            tools_list = json.loads(tools_json_str)
-            if not isinstance(tools_list, list):
-                raise ValueError('工具配置必须是JSON数组格式')
-            self.tools_list = tools_list
-            self._save_tools_list(tools_list)
-            return tools_list
-        except Exception:
-            print_traceback()
-            return self.tools_list
-
     def reload_tools_list(self):
         """重新加载工具列表"""
         from qwen_agent.gui.gradio_dep import gr
         self.tools_list = self._load_tools_list()
         choices = self._get_tools_choices(self.tools_list)
-        return self.tools_list, gr.update(choices=choices, value=None), gr.update(value='')
+        return gr.update(choices=choices, value=None), gr.update(value='')
 
-    def load_tools_item(self, selector, tools_state):
+    def load_tools_item(self, selector):
         """加载选中的工具项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
             return gr.update(value='')
         try:
-            tools_list = tools_state or self.tools_list
+            tools_list = self.tools_list
             index = self._get_tool_index_by_name(selector, tools_list)
             if 0 <= index < len(tools_list):
                 item = tools_list[index]
@@ -1222,7 +1246,7 @@ class WebUI:
             print_traceback()
         return gr.update(value='')
 
-    def add_tools_item(self, tools_json_str, tools_state):
+    def add_tools_item(self, tools_json_str):
         """添加新的工具项"""
         from qwen_agent.gui.gradio_dep import gr
         try:
@@ -1237,24 +1261,24 @@ class WebUI:
             if tool is None:
                 raise ValueError('工具配置不能为空')
             
-            tools_list = list(tools_state or self.tools_list)
+            tools_list = list(self.tools_list)
             tools_list.append(tool)
             self.tools_list = tools_list
             self._save_tools_list(tools_list)
             choices = self._get_tools_choices(tools_list)
             new_name = choices[-1] if choices else None
-            return tools_list, gr.update(choices=choices, value=new_name), gr.update(value='')
+            return gr.update(choices=choices, value=new_name), gr.update(value='')
         except Exception:
             print_traceback()
-            return tools_state or self.tools_list, gr.update(), gr.update()
+            return gr.update(), gr.update()
 
-    def update_tools_item(self, selector, tools_json_str, tools_state):
+    def update_tools_item(self, selector, tools_json_str):
         """更新选中的工具项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            return tools_state or self.tools_list, gr.update(), gr.update()
+            return gr.update(), gr.update()
         try:
-            tools_list = list(tools_state or self.tools_list)
+            tools_list = list(self.tools_list)
             index = self._get_tool_index_by_name(selector, tools_list)
             
             # 尝试解析为JSON，如果失败则作为字符串处理
@@ -1280,18 +1304,18 @@ class WebUI:
                     display_value = tool
                 else:
                     display_value = json.dumps(tool, ensure_ascii=False, indent=2)
-                return tools_list, gr.update(choices=choices, value=new_name), gr.update(value=display_value)
+                return gr.update(choices=choices, value=new_name), gr.update(value=display_value)
         except Exception:
             print_traceback()
-        return tools_state or self.tools_list, gr.update(), gr.update()
+        return gr.update(), gr.update()
 
-    def delete_tools_item(self, selector, tools_state):
+    def delete_tools_item(self, selector):
         """删除选中的工具项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            return tools_state or self.tools_list, gr.update(), gr.update()
+            return gr.update(), gr.update()
         try:
-            tools_list = list(tools_state or self.tools_list)
+            tools_list = list(self.tools_list)
             index = self._get_tool_index_by_name(selector, tools_list)
             if 0 <= index < len(tools_list):
                 tools_list.pop(index)
@@ -1299,10 +1323,10 @@ class WebUI:
                 self._save_tools_list(tools_list)
                 choices = self._get_tools_choices(tools_list)
                 new_value = choices[0] if choices else None
-                return tools_list, gr.update(choices=choices, value=new_value), gr.update(value='')
+                return gr.update(choices=choices, value=new_value), gr.update(value='')
         except Exception:
             print_traceback()
-        return tools_state or self.tools_list, gr.update(), gr.update()
+        return gr.update(), gr.update()
 
     # === Agent管理相关方法 ===
     def _get_agent_config_choices(self, agent_configs: list) -> list:
@@ -1348,48 +1372,33 @@ class WebUI:
         except Exception:
             print_traceback()
 
-    def save_agent_configs(self, agent_configs_json_str):
-        """保存Agent配置列表"""
-        try:
-            agent_configs = json.loads(agent_configs_json_str)
-            if not isinstance(agent_configs, list):
-                raise ValueError('Agent配置必须是JSON数组格式')
-            self.agent_configs = agent_configs
-            self._save_agent_configs(agent_configs)
-            return agent_configs
-        except Exception:
-            print_traceback()
-            return self.agent_configs
-
-    def reload_agent_configs(self, llm_cfg_state, tools_state):
+    def reload_agent_configs(self):
         """重新加载Agent配置列表"""
         from qwen_agent.gui.gradio_dep import gr
-        self.agent_configs = self._load_agent_configs()
-        choices = self._get_agent_config_choices(self.agent_configs)
-        llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-        tools_choices = self._get_tools_choices(tools_state or self.tools_list)
-        return (self.agent_configs, 
-                gr.update(choices=choices, value=None),
+        self.agent_cfg_list = self._load_agent_configs()
+        choices = self._get_agent_config_choices(self.agent_cfg_list)
+        llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+        tools_choices = self._get_tools_choices(self.tools_list)
+        return (gr.update(choices=choices, value=None),
                 gr.update(value=''),
                 gr.update(value=''),
                 gr.update(choices=llm_cfg_choices, value=llm_cfg_choices[0][1] if llm_cfg_choices else None),
                 gr.update(choices=tools_choices, value=[]))
 
-    def load_agent_config_item(self, selector, agent_configs_state, llm_cfg_state, tools_state):
+    def load_agent_config_item(self, selector):
         """加载选中的Agent配置项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-            tools_choices = self._get_tools_choices(tools_state or self.tools_list)
+            llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+            tools_choices = self._get_tools_choices(self.tools_list)
             return (gr.update(value=''),
                     gr.update(value=''),
                     gr.update(choices=llm_cfg_choices, value=llm_cfg_choices[0][1] if llm_cfg_choices else None),
                     gr.update(choices=tools_choices, value=[]))
         try:
-            agent_configs = agent_configs_state or self.agent_configs
-            index = self._get_agent_config_index_by_name(selector, agent_configs)
-            if 0 <= index < len(agent_configs):
-                cfg = agent_configs[index]
+            index = self._get_agent_config_index_by_name(selector, self.agent_cfg_list)
+            if 0 <= index < len(self.agent_cfg_list):
+                cfg = self.agent_cfg_list[index]
                 name = cfg.get('name', '')
                 description = cfg.get('description', '')
                 # 优先使用llm_cfg_id，兼容旧的llm_cfg_index
@@ -1397,7 +1406,7 @@ class WebUI:
                 if not llm_cfg_id:
                     # 兼容旧格式：从索引转换为ID
                     llm_cfg_index = cfg.get('llm_cfg_index', 0)
-                    llm_cfg_list = llm_cfg_state or self.llm_cfg_list
+                    llm_cfg_list = self.llm_cfg_list
                     if 0 <= llm_cfg_index < len(llm_cfg_list):
                         llm_cfg = llm_cfg_list[llm_cfg_index]
                         if isinstance(llm_cfg, dict):
@@ -1407,12 +1416,12 @@ class WebUI:
                                 cfg['llm_cfg_id'] = llm_cfg_id
                                 if 'llm_cfg_index' in cfg:
                                     del cfg['llm_cfg_index']
-                                self._save_agent_configs(agent_configs)
+                                self._save_agent_configs(self.agent_cfg_list)
                 
                 tools_indices = cfg.get('tools_indices', [])
                 
                 # 获取LLM配置ID
-                llm_cfg_list = llm_cfg_state or self.llm_cfg_list
+                llm_cfg_list = self.llm_cfg_list
                 llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_list)
                 llm_cfg_value = None
                 if llm_cfg_id:
@@ -1425,7 +1434,7 @@ class WebUI:
                     llm_cfg_value = llm_cfg_choices[0][1]
                 
                 # 获取工具名称列表
-                tools_list = tools_state or self.tools_list
+                tools_list = self.tools_list
                 tools_choices = self._get_tools_choices(tools_list)
                 selected_tools = []
                 for idx in tools_indices:
@@ -1438,14 +1447,14 @@ class WebUI:
                         gr.update(choices=tools_choices, value=selected_tools))
         except Exception:
             print_traceback()
-        llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-        tools_choices = self._get_tools_choices(tools_state or self.tools_list)
+        llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+        tools_choices = self._get_tools_choices(self.tools_list)
         return (gr.update(value=''),
                 gr.update(value=''),
                 gr.update(choices=llm_cfg_choices, value=llm_cfg_choices[0][1] if llm_cfg_choices else None),
                 gr.update(choices=tools_choices, value=[]))
 
-    def add_agent_config_item(self, name, description, llm_cfg_selector, tools_selector, agent_configs_state, llm_cfg_state, tools_state):
+    def add_agent_config_item(self, name, description, llm_cfg_selector, tools_selector):
         """添加新的Agent配置项"""
         from qwen_agent.gui.gradio_dep import gr
         try:
@@ -1456,7 +1465,7 @@ class WebUI:
             
             # llm_cfg_selector现在是ID
             llm_cfg_id = llm_cfg_selector
-            llm_cfg_list = llm_cfg_state or self.llm_cfg_list
+            llm_cfg_list = self.llm_cfg_list
             # 验证ID是否存在
             if not llm_cfg_id or not self._get_llm_cfg_by_id(llm_cfg_id, llm_cfg_list):
                 # 如果ID无效，使用第一个配置
@@ -1467,7 +1476,7 @@ class WebUI:
                     raise ValueError('没有可用的LLM配置')
             
             # 从工具名称列表获取索引列表
-            tools_list = tools_state or self.tools_list
+            tools_list = self.tools_list
             tools_indices = []
             if tools_selector:
                 for tool_name in tools_selector:
@@ -1481,19 +1490,19 @@ class WebUI:
                 'llm_cfg_id': llm_cfg_id,
                 'tools_indices': tools_indices,
             }
-            agent_configs = list(agent_configs_state or self.agent_configs)
-            agent_configs.append(agent_config)
-            self.agent_configs = agent_configs
-            self._save_agent_configs(agent_configs)
+            self.agent_cfg_list.append(agent_config)
+
+            agent = self._create_agent_from_config(agent_config)
+            self.agent_list.append(agent)
+            self._save_agent_configs(self.agent_cfg_list)
             
             # 刷新agent列表
-            selector_update, info_update, plugins_update = self.refresh_agents(agent_configs)
+            selector_update, info_update, plugins_update = self.refresh_agent(len(self.agent_cfg_list) - 1)
             
-            choices = self._get_agent_config_choices(agent_configs)
+            choices = self._get_agent_config_choices(self.agent_cfg_list)
             llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_list)
             tools_choices = self._get_tools_choices(tools_list)
-            return (agent_configs,
-                    gr.update(choices=choices, value=name),
+            return (gr.update(choices=choices, value=name),
                     gr.update(value=''),
                     gr.update(value=''),
                     gr.update(choices=llm_cfg_choices, value=llm_cfg_id),
@@ -1503,10 +1512,9 @@ class WebUI:
                     plugins_update)
         except Exception:
             print_traceback()
-            llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-            tools_choices = self._get_tools_choices(tools_state or self.tools_list)
-            return (agent_configs_state or self.agent_configs,
-                    gr.update(),
+            llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+            tools_choices = self._get_tools_choices(self.tools_list)
+            return (gr.update(),
                     gr.update(),
                     gr.update(),
                     gr.update(choices=llm_cfg_choices),
@@ -1515,14 +1523,13 @@ class WebUI:
                     gr.update(),
                     gr.update())
 
-    def update_agent_config_item(self, selector, name, description, llm_cfg_selector, tools_selector, agent_configs_state, llm_cfg_state, tools_state):
+    def update_agent_config_item(self, selector, name, description, llm_cfg_selector, tools_selector):
         """更新选中的Agent配置项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-            tools_choices = self._get_tools_choices(tools_state or self.tools_list)
-            return (agent_configs_state or self.agent_configs,
-                    gr.update(),
+            llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+            tools_choices = self._get_tools_choices(self.tools_list)
+            return (gr.update(),
                     gr.update(),
                     gr.update(),
                     gr.update(choices=llm_cfg_choices),
@@ -1531,8 +1538,7 @@ class WebUI:
                     gr.update(),
                     gr.update())
         try:
-            agent_configs = list(agent_configs_state or self.agent_configs)
-            index = self._get_agent_config_index_by_name(selector, agent_configs)
+            index = self._get_agent_config_index_by_name(selector, self.agent_cfg_list)
             name = (name or '').strip()
             if not name:
                 raise ValueError('Agent名称不能为空')
@@ -1540,7 +1546,7 @@ class WebUI:
             
             # llm_cfg_selector现在是ID
             llm_cfg_id = llm_cfg_selector
-            llm_cfg_list = llm_cfg_state or self.llm_cfg_list
+            llm_cfg_list = self.llm_cfg_list
             # 验证ID是否存在
             if not llm_cfg_id or not self._get_llm_cfg_by_id(llm_cfg_id, llm_cfg_list):
                 # 如果ID无效，使用第一个配置
@@ -1551,7 +1557,7 @@ class WebUI:
                     raise ValueError('没有可用的LLM配置')
             
             # 从工具名称列表获取索引列表
-            tools_list = tools_state or self.tools_list
+            tools_list = self.tools_list
             tools_indices = []
             if tools_selector:
                 for tool_name in tools_selector:
@@ -1559,24 +1565,23 @@ class WebUI:
                     if idx >= 0:
                         tools_indices.append(idx)
             
-            if 0 <= index < len(agent_configs):
-                agent_configs[index] = {
+            if 0 <= index < len(self.agent_cfg_list):
+                self.agent_cfg_list[index] = {
                     'name': name,
                     'description': description,
                     'llm_cfg_id': llm_cfg_id,
                     'tools_indices': tools_indices,
                 }
-                self.agent_configs = agent_configs
-                self._save_agent_configs(agent_configs)
+                self._save_agent_configs(self.agent_cfg_list)
                 
                 # 刷新agent列表
-                selector_update, info_update, plugins_update = self.refresh_agents(agent_configs)
+                self.agent_list[index] = self._create_agent_from_config(self.agent_cfg_list[index])
+                selector_update, info_update, plugins_update = self.refresh_agent(index)
                 
-                choices = self._get_agent_config_choices(agent_configs)
+                choices = self._get_agent_config_choices(self.agent_cfg_list)
                 llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_list)
                 tools_choices = self._get_tools_choices(tools_list)
-                return (agent_configs,
-                        gr.update(choices=choices, value=name),
+                return (gr.update(choices=choices, value=name),
                         gr.update(value=name),
                         gr.update(value=description),
                         gr.update(choices=llm_cfg_choices, value=llm_cfg_id),
@@ -1586,10 +1591,9 @@ class WebUI:
                         plugins_update)
         except Exception:
             print_traceback()
-        llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-        tools_choices = self._get_tools_choices(tools_state or self.tools_list)
-        return (agent_configs_state or self.agent_configs,
-                gr.update(),
+        llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+        tools_choices = self._get_tools_choices(self.tools_list)
+        return (gr.update(),
                 gr.update(),
                 gr.update(),
                 gr.update(choices=llm_cfg_choices),
@@ -1598,14 +1602,13 @@ class WebUI:
                 gr.update(),
                 gr.update())
 
-    def delete_agent_config_item(self, selector, agent_configs_state, llm_cfg_state, tools_state):
+    def delete_agent_config_item(self, selector):
         """删除选中的Agent配置项"""
         from qwen_agent.gui.gradio_dep import gr
         if selector is None or not selector:
-            llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-            tools_choices = self._get_tools_choices(tools_state or self.tools_list)
-            return (agent_configs_state or self.agent_configs,
-                    gr.update(),
+            llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+            tools_choices = self._get_tools_choices(self.tools_list)
+            return (gr.update(),
                     gr.update(),
                     gr.update(),
                     gr.update(choices=llm_cfg_choices),
@@ -1614,30 +1617,41 @@ class WebUI:
                     gr.update(),
                     gr.update())
         try:
-            agent_configs = list(agent_configs_state or self.agent_configs)
-            index = self._get_agent_config_index_by_name(selector, agent_configs)
-            if 0 <= index < len(agent_configs):
-                agent_configs.pop(index)
-                self.agent_configs = agent_configs
-                self._save_agent_configs(agent_configs)
+            self.agent_cfg_list = list(self.agent_cfg_list)
+            index = self._get_agent_config_index_by_name(selector, self.agent_cfg_list)
+            if 0 <= index < len(self.agent_cfg_list):
+                self.agent_cfg_list.pop(index)
+                self.agent_cfg_list = self.agent_cfg_list
+                self.agent_list.pop(index)
+                self._save_agent_configs(self.agent_cfg_list)
                 
                 # 刷新agent列表
-                selector_update, info_update, plugins_update = self.refresh_agents(agent_configs)
+                if len(self.agent_cfg_list) > 0:
+                    selector_update, info_update, plugins_update = self.refresh_agent(index - 1)
+                else:
+                    return (gr.update(),
+                            gr.update(),
+                            gr.update(),
+                            gr.update(choices=llm_cfg_choices),
+                            gr.update(choices=tools_choices),
+                            gr.update(),
+                            gr.update(),
+                            gr.update())
                 
-                choices = self._get_agent_config_choices(agent_configs)
-                llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-                tools_choices = self._get_tools_choices(tools_state or self.tools_list)
+                choices = self._get_agent_config_choices(self.agent_cfg_list)
+                llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+                tools_choices = self._get_tools_choices(self.tools_list)
                 new_value = choices[0] if choices else None
                 if new_value:
                     # 加载第一个配置项
-                    cfg = agent_configs[0]
+                    cfg = self.agent_cfg_list[0]
                     name = cfg.get('name', '')
                     description = cfg.get('description', '')
                     llm_cfg_id = cfg.get('llm_cfg_id')
                     if not llm_cfg_id:
                         # 兼容旧格式
                         llm_cfg_index = cfg.get('llm_cfg_index', 0)
-                        llm_cfg_list = llm_cfg_state or self.llm_cfg_list
+                        llm_cfg_list = self.llm_cfg_list
                         if 0 <= llm_cfg_index < len(llm_cfg_list):
                             llm_cfg = llm_cfg_list[llm_cfg_index]
                             if isinstance(llm_cfg, dict):
@@ -1646,7 +1660,7 @@ class WebUI:
                     
                     # 获取LLM配置ID
                     llm_cfg_value = None
-                    if llm_cfg_id and self._get_llm_cfg_by_id(llm_cfg_id, llm_cfg_state or self.llm_cfg_list):
+                    if llm_cfg_id and self._get_llm_cfg_by_id(llm_cfg_id, self.llm_cfg_list):
                         llm_cfg_value = llm_cfg_id
                     elif llm_cfg_choices:
                         llm_cfg_value = llm_cfg_choices[0][1]
@@ -1657,8 +1671,7 @@ class WebUI:
                         if 0 <= idx < len(tools_choices):
                             selected_tools.append(tools_choices[idx])
                     
-                    return (agent_configs,
-                            gr.update(choices=choices, value=new_value),
+                    return (gr.update(choices=choices, value=new_value),
                             gr.update(value=name),
                             gr.update(value=description),
                             gr.update(choices=llm_cfg_choices, value=llm_cfg_value),
@@ -1667,8 +1680,7 @@ class WebUI:
                             info_update,
                             plugins_update)
                 else:
-                    return (agent_configs,
-                            gr.update(choices=choices, value=None),
+                    return (gr.update(choices=choices, value=None),
                             gr.update(value=''),
                             gr.update(value=''),
                             gr.update(choices=llm_cfg_choices, value=None),
@@ -1678,10 +1690,9 @@ class WebUI:
                             plugins_update)
         except Exception:
             print_traceback()
-        llm_cfg_choices = self._get_llm_cfg_choices(llm_cfg_state or self.llm_cfg_list)
-        tools_choices = self._get_tools_choices(tools_state or self.tools_list)
-        return (agent_configs_state or self.agent_configs,
-                gr.update(),
+        llm_cfg_choices = self._get_llm_cfg_choices(self.llm_cfg_list)
+        tools_choices = self._get_tools_choices(self.tools_list)
+        return (gr.update(),
                 gr.update(),
                 gr.update(),
                 gr.update(choices=llm_cfg_choices),
@@ -1690,80 +1701,66 @@ class WebUI:
                 gr.update(),
                 gr.update())
 
-    def _create_agents_from_configs(self) -> List[Agent]:
-        """根据agent_configs动态创建agent列表"""
-        if not self.agent_configs:
-            return []
-
-        agents = []
-        for agent_cfg in self.agent_configs:
-            try:
-                # agent_cfg格式: {"name": "...", "description": "...", "llm_cfg_id": "...", "tools_indices": [0, 1]}
-                name = agent_cfg.get('name', 'Agent')
-                description = agent_cfg.get('description', "I'm a helpful assistant.")
-                
-                # 优先使用llm_cfg_id，兼容旧的llm_cfg_index
-                llm_cfg_id = agent_cfg.get('llm_cfg_id')
-                llm_cfg = None
-                
-                if llm_cfg_id:
-                    # 使用ID查找
-                    llm_cfg = self._get_llm_cfg_by_id(llm_cfg_id, self.llm_cfg_list)
-                    if not llm_cfg:
-                        logger.warning(f'LLM配置ID {llm_cfg_id} 不存在，使用默认配置')
-                else:
-                    # 兼容旧格式：使用索引
-                    llm_cfg_index = agent_cfg.get('llm_cfg_index', 0)
-                    if llm_cfg_index < len(self.llm_cfg_list):
-                        llm_cfg = self.llm_cfg_list[llm_cfg_index]
-                        # 自动迁移到ID格式
-                        if isinstance(llm_cfg, dict) and 'id' in llm_cfg:
-                            agent_cfg['llm_cfg_id'] = llm_cfg['id']
-                            if 'llm_cfg_index' in agent_cfg:
-                                del agent_cfg['llm_cfg_index']
-                            self._save_agent_configs(self.agent_configs)
-                    else:
-                        logger.warning(f'LLM配置索引{llm_cfg_index}超出范围，使用默认配置')
-                
+    def _create_agent_from_config(self, agent_cfg) -> List[Agent]:
+        try:
+            # agent_cfg格式: {"name": "...", "description": "...", "llm_cfg_id": "...", "tools_indices": [0, 1]}
+            name = agent_cfg.get('name', 'Agent')
+            description = agent_cfg.get('description', "I'm a helpful assistant.")
+            
+            # 优先使用llm_cfg_id，兼容旧的llm_cfg_index
+            llm_cfg_id = agent_cfg.get('llm_cfg_id')
+            llm_cfg = None
+            
+            if llm_cfg_id:
+                # 使用ID查找
+                llm_cfg = self._get_llm_cfg_by_id(llm_cfg_id, self.llm_cfg_list)
                 if not llm_cfg:
-                    llm_cfg = {'model': 'qwen-plus', 'model_type': 'qwen_dashscope'}
+                    logger.warning(f'LLM配置ID {llm_cfg_id} 不存在，使用默认配置')
+            else:
+                # 兼容旧格式：使用索引
+                llm_cfg_index = agent_cfg.get('llm_cfg_index', 0)
+                if llm_cfg_index < len(self.llm_cfg_list):
+                    llm_cfg = self.llm_cfg_list[llm_cfg_index]
+                    # 自动迁移到ID格式
+                    if isinstance(llm_cfg, dict) and 'id' in llm_cfg:
+                        agent_cfg['llm_cfg_id'] = llm_cfg['id']
+                        if 'llm_cfg_index' in agent_cfg:
+                            del agent_cfg['llm_cfg_index']
+                        self._save_agent_configs(self.agent_cfg_list)
+                else:
+                    logger.warning(f'LLM配置索引{llm_cfg_index}超出范围，使用默认配置')
+            
+            if not llm_cfg:
+                llm_cfg = {'model': 'qwen-plus', 'model_type': 'qwen_dashscope'}
 
-                # 获取tools
-                tools = []
-                tools_indices = agent_cfg.get('tools_indices', [])
-                for tool_idx in tools_indices:
-                    if tool_idx < len(self.tools_list):
-                        tools.append(self.tools_list[tool_idx])
-                    else:
-                        logger.warning(f'工具索引{tool_idx}超出范围，跳过')
+            # 获取tools
+            tools = []
+            tools_indices = agent_cfg.get('tools_indices', [])
+            for tool_idx in tools_indices:
+                if tool_idx < len(self.tools_list):
+                    tools.append(self.tools_list[tool_idx])
+                else:
+                    logger.warning(f'工具索引{tool_idx}超出范围，跳过')
 
-                # 创建Assistant时，排除ID字段
-                llm_cfg_for_agent = {k: v for k, v in llm_cfg.items() if k != 'id'}
+            # 创建Assistant时，排除ID字段
+            llm_cfg_for_agent = {k: v for k, v in llm_cfg.items() if k != 'id'}
 
-                # 创建Assistant
-                agent = Assistant(
-                    llm=llm_cfg_for_agent,
-                    function_list=tools if tools else None,
-                    name=name,
-                    description=description,
-                )
-                agents.append(agent)
-            except Exception:
-                print_traceback()
-                logger.error(f'创建Agent失败: {agent_cfg}')
+            # 创建Assistant
+            agent = Assistant(
+                llm=llm_cfg_for_agent,
+                function_list=tools if tools else None,
+                name=name,
+                description=description,
+            )
+            return agent
+        except Exception:
+            print_traceback()
+            logger.error(f'创建Agent失败: {agent_cfg}')
+            return None
 
-        return agents
-
-    def refresh_agents(self, agent_configs_state):
+    def refresh_agent(self, index):
         """刷新Agent列表，从配置重新创建"""
         from qwen_agent.gui.gradio_dep import gr
-
-        # 更新agent_configs
-        self.agent_configs = agent_configs_state or []
-        # 重新创建agent列表
-        self.agent_list = self._create_agents_from_configs()
-        # 更新agent_config_list
-        self.agent_config_list = self._get_agent_config_list(self.agent_list)
 
         # 更新agent_selector
         if len(self.agent_list) > 0:
@@ -1780,4 +1777,4 @@ class WebUI:
                 interactive=False,
             )
 
-        return agent_selector_update, self._create_agent_info_block(0), self._create_agent_plugins_block(0)
+        return agent_selector_update, self._create_agent_info_block(index), self._create_agent_plugins_block(index)
