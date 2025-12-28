@@ -506,7 +506,7 @@ class WebUI:
                             [chatbot, history],
                         )
 
-                    input_promise.then(lambda _: gr.update(interactive=True), None, [input])
+                    input_promise.then(self.flushed, None, [input])
 
             demo.load(
                 fn=self._load_latest_settings,
@@ -671,6 +671,11 @@ class WebUI:
 
         if self.verbose:
             logger.info('agent_run response:\n' + pprint.pformat(responses, indent=2))
+
+    def flushed(self):
+        from qwen_agent.gui.gradio_dep import gr
+
+        return gr.update(interactive=True)
 
     def _normalize_prompt_suggestions(self, raw_suggestions):
         """将各种形式的 prompt.suggestions 统一为 {name: suggestion} 的字典。
