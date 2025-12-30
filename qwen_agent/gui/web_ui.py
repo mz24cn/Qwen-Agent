@@ -273,24 +273,14 @@ class WebUI:
                                               }])
 
                         with gr.Row():
-                            if len(self.agent_list) >= 1:
-                                agent_selector = gr.Dropdown(
-                                    [(agent.name, i) for i, agent in enumerate(self.agent_list)],
-                                    label='使用智能体',
-                                    info='',
-                                    value=0,
-                                    interactive=True,
-                                    scale=3
-                                )
-                            else:
-                                agent_selector = gr.Dropdown(
-                                    [],
-                                    label='使用智能体',
-                                    info='',
-                                    value=None,
-                                    interactive=False,
-                                    scale=2
-                                )
+                            agent_selector = gr.Dropdown(
+                                [(agent.name, i) for i, agent in enumerate(self.agent_list)],
+                                label='使用智能体',
+                                info='',
+                                value=0,
+                                interactive=True,
+                                scale=3
+                            )
 
                             audio_input = gr.Audio(
                                 sources=["microphone"],
@@ -465,14 +455,13 @@ class WebUI:
                             queue=False,
                         )
 
-                    # 获取当前可用的agent列表（动态或静态）
-                    if len(self.agent_list) > 1:
-                        agent_selector.change(
-                            fn=self.change_agent,
-                            inputs=[agent_selector],
-                            outputs=[agent_selector, agent_info_block, agent_plugins_block],
-                            queue=False,
-                        )
+                    # 获取当前可用的agent列表
+                    agent_selector.change(
+                        fn=self.change_agent,
+                        inputs=[agent_selector],
+                        outputs=[agent_selector, agent_info_block, agent_plugins_block],
+                        queue=False,
+                    )
 
                     # 添加清除按钮的点击事件
                     clear_btn.click(
@@ -487,26 +476,17 @@ class WebUI:
                         inputs=[input, audio_input, chatbot, history],
                         outputs=[input, audio_input, chatbot, history],
                         queue=False,
+                    ).then(
+                        self.add_mention,
+                        [chatbot, agent_selector],
+                        [chatbot, agent_selector],
+                    ).then(
+                        self.agent_run,
+                        [chatbot, history, agent_selector],
+                        [chatbot, history, agent_selector],
+                    ).then(
+                        self.flushed, None, [input]
                     )
-
-                    if len(self.agent_list) > 1: # and self.enable_mention:
-                        input_promise = input_promise.then(
-                            self.add_mention,
-                            [chatbot, agent_selector],
-                            [chatbot, agent_selector],
-                        ).then(
-                            self.agent_run,
-                            [chatbot, history, agent_selector],
-                            [chatbot, history, agent_selector],
-                        )
-                    else:
-                        input_promise = input_promise.then(
-                            self.agent_run,
-                            [chatbot, history],
-                            [chatbot, history],
-                        )
-
-                    input_promise.then(self.flushed, None, [input])
 
             demo.load(
                 fn=self._load_latest_settings,
@@ -526,7 +506,9 @@ class WebUI:
                     agent_name_input,
                     agent_description_input,
                     agent_llm_cfg_selector,
-                    agent_tools_selector
+                    agent_tools_selector,
+
+                    agent_selector
                 ],
                 queue=False
             )
@@ -785,6 +767,11 @@ class WebUI:
             gr.update(
                 choices=agent_tools_choices,
                 value=agent_tools_selected_val
+            ),
+
+            gr.update(
+                choices=[(agent.name, i) for i, agent in enumerate(self.agent_list)],
+                value=0
             )
         )
     
