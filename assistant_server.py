@@ -38,18 +38,13 @@ def generate_streaming_responses(messages, bot, format) -> Generator[str, None, 
         return
 
     result = response[-1]['content']
-
     if format == 'json':
-        try:
-            result = json_repair.loads(result)
-        except Exception:
-            # 保持容错，原样返回
-            pass
+        result = json_repair.loads(result)
 
     result = {
         'code': 0,
         'msg': 'success',
-        'data': result,
+        'data': result
     }
     yield json.dumps(result, ensure_ascii=False)
 
@@ -80,8 +75,25 @@ def prompt_any(key: str, payload: dict = None, agent: str = '', format: str = ''
         },
     )
 
+@app.post('/call/{agent}/{tool}/{format}')
+def call_tool(agent: str, tool: str, args: dict = None, format: str = ''):
+    """绕开大模型代理，直接调用工具。"""
+
+    n = next((i for i, a in enumerate(UI.agent_list) if getattr(a, 'name', None) == agent), 0)
+    agent_runner = UI.agent_hub or UI.agent_list[n]
+
+    result = agent_runner._call_tool(tool_name=tool, tool_args=json.dumps(args or {}))
+    if format == 'json':
+        result = json_repair.loads(result)
+
+    return {
+        'code': 0,
+        'msg': 'success',
+        'data': result
+    }
+
 #同一端口既跑 Gradio WebUI，又暴露 API。经测试，此句必须放在@app.post(...) 之后，否则会覆盖路由。
 gr.mount_gradio_app(app, UI.demo, path="/")
 
 if __name__ == '__main__':
-    uvicorn.run(app, host="0.0.0.0")
+    uvicorn.run(app, host="0.0.0.0", port=7991)
